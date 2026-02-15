@@ -1,0 +1,2 @@
+[console_scripts]
+pipely = pipely.cli:app

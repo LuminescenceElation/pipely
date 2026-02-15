@@ -1,0 +1,9 @@
+pyproject.toml
+pipely/__init__.py
+pipely/cli.py
+pipely.egg-info/PKG-INFO
+pipely.egg-info/SOURCES.txt
+pipely.egg-info/dependency_links.txt
+pipely.egg-info/entry_points.txt
+pipely.egg-info/requires.txt
+pipely.egg-info/top_level.txt
