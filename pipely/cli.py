@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import shlex
 import subprocess
-import time
 from pathlib import Path
 
 import typer
 import yaml
-from rich.console import Console
+
+from pipely.logging_utils import new_run_id, setup_logging
 
 app = typer.Typer(no_args_is_help=True)
-console = Console()
 
 run_app = typer.Typer(no_args_is_help=True)
 app.add_typer(run_app, name="run")
@@ -18,73 +17,80 @@ app.add_typer(run_app, name="run")
 
 @run_app.command("pipeline")
 def pipeline(
-    pipeline_file: Path = typer.Argument(..., exists=True),
-    dry_run: bool = typer.Option(False, "--dry-run"),
+    pipeline_file: Path = typer.Argument(..., exists=True, readable=True),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Do not execute commands; only print what would run."),
+    log_level: str = typer.Option("INFO", "--log-level", help="Logging level: DEBUG, INFO, WARNING, ERROR"),
+    log_dir: Path = typer.Option(Path("logs"), "--log-dir", help="Directory to store run logs."),
 ) -> None:
-    data = yaml.safe_load(pipeline_file.read_text(encoding="utf-8"))
+    # Create a unique run id and start logging immediately.
+    run_id = new_run_id()
+    logger, logfile = setup_logging(run_id, log_level=log_level, log_dir=log_dir)
+
+    logger.info("Starting pipeline run")
+    logger.info("Pipeline file: %s", pipeline_file)
+    logger.info("Dry run: %s", dry_run)
+
+    # Load YAML
+    try:
+        data = yaml.safe_load(pipeline_file.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        logger.exception("Failed to read/parse YAML: %s", e)
+        raise typer.Exit(code=2)
+
     pipeline_name = data.get("name", "pipeline")
-    run_id = str(int(time.time()))
-    console.print(f"[bold]Running[/bold] {pipeline_name} (run_id={run_id})")
+    logger.info("Pipeline name: %s", pipeline_name)
 
     jobs: dict = data.get("jobs", {})
     if not jobs:
-        console.print("[red]No jobs found in pipeline YAML.[/red]")
+        logger.error("No jobs found in pipeline YAML.")
         raise typer.Exit(code=2)
 
     # MVP runner: run jobs in the order they appear, steps in order.
     for job_name, job in jobs.items():
-        console.print(f"\n[bold blue]Job:[/bold blue] {job_name}")
+        logger.info("=== Job start: %s ===", job_name)
 
-        steps = job.get("steps", [])
+        steps = (job or {}).get("steps", [])
         if not steps:
-            console.print("[yellow]  (no steps)[/yellow]")
+            logger.warning("Job '%s' has no steps", job_name)
             continue
 
         for idx, step in enumerate(steps, start=1):
-            step_name = step.get("name", f"step-{idx}")
-            command = step.get("run")
+            step_name = (step or {}).get("name", f"step-{idx}")
+            command = (step or {}).get("run")
 
             if not command:
-                console.print(f"[yellow]  Skipping {step_name}: no 'run' command[/yellow]")
+                logger.warning("Skipping step '%s' (no 'run' command)", step_name)
                 continue
 
-            console.print(f"[cyan]  → Step {idx}: {step_name}[/cyan]")
-            console.print(f"[dim]    $ {command}[/dim]")
+            logger.info("Step %s start: %s", idx, step_name)
+            logger.info("$ %s", command)
 
             if dry_run:
-                console.print("[yellow]    DRY RUN[/yellow]")
+                logger.info("DRY RUN - not executing")
                 continue
 
-            # Safely parse the command into arguments
+            # Safer default than shell=True: split into args and run directly.
             try:
                 args = shlex.split(command)
             except ValueError as e:
-                console.print(f"[red]    Failed to parse command: {e}[/red]")
+                logger.error("Failed to parse command: %s", e)
                 raise typer.Exit(code=2)
 
-            # Execute the command with timeout safety
-            try:
-                result = subprocess.run(
-                    args,
-                    text=True,
-                    capture_output=True,
-                    timeout=300,  # 5 minute safety timeout
-                )
-            except subprocess.TimeoutExpired:
-                console.print("[red]    ✖ Step timed out after 300s[/red]")
-                raise typer.Exit(code=124)
+            result = subprocess.run(args, text=True, capture_output=True)
 
-            # Print output
             if result.stdout:
-                console.print(result.stdout.rstrip())
+                logger.info("stdout:\n%s", result.stdout.rstrip())
             if result.stderr:
-                console.print(f"[red]{result.stderr.rstrip()}[/red]")
+                logger.warning("stderr:\n%s", result.stderr.rstrip())
 
-            # Fail fast on error
             if result.returncode != 0:
-                console.print(f"[red]    ✖ Step failed (exit code {result.returncode})[/red]")
+                logger.error("Step failed (exit code %s)", result.returncode)
+                logger.info("Log file saved at: %s", logfile)
                 raise typer.Exit(code=result.returncode)
 
-            console.print("[green]    ✓ OK[/green]")
+            logger.info("Step %s OK: %s", idx, step_name)
 
-    console.print("\n[bold green]Pipeline completed successfully.[/bold green]")
+        logger.info("=== Job end: %s ===", job_name)
+
+    logger.info("Pipeline completed successfully")
+    logger.info("Log file saved at: %s", logfile)

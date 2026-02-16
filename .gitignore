@@ -13,3 +13,6 @@ build/
 # OS / editor files
 .DS_Store
 .vscode/
+
+# Runtime logs
+logs/
