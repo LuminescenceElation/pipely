@@ -1,19 +1,9 @@
 name: demo
-env:
-  PIP_CACHE_DIR: ".cache/pip"
 
 jobs:
-  validate:
+  hello:
     steps:
-      - run: "python -c \"print('lint placeholder')\""
-
-  test:
-    needs: [validate]
-    steps:
-      - run: "python -c \"print('tests placeholder')\""
-        timeout: 30
-
-  build:
-    needs: [test]
-    steps:
-      - run: "python -c \"print('build placeholder')\""
+      - name: greet
+        run: echo "Hello from Pipely!"
+      - name: python_version
+        run: python --version
