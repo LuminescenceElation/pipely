@@ -12,3 +12,6 @@ dependencies = [
 
 [project.scripts]
 pipely = "pipely.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["pipely*"]
