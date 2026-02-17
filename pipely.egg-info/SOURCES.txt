@@ -1,6 +1,8 @@
+README.md
 pyproject.toml
 pipely/__init__.py
 pipely/cli.py
+pipely/logging_utils.py
 pipely.egg-info/PKG-INFO
 pipely.egg-info/SOURCES.txt
 pipely.egg-info/dependency_links.txt
