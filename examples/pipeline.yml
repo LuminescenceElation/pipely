@@ -5,5 +5,14 @@ jobs:
     steps:
       - name: greet
         run: echo "Hello from Pipely!"
+
+      # This step is designed to fail once, then succeed on retry.
+      - name: flaky_step_demo
+        run: bash -lc 'test -f /tmp/pipely_retry_demo || (echo "first run fails"; touch /tmp/pipely_retry_demo; exit 1); echo "second run ok"'
+        retries: 1
+        retry_delay_seconds: 1
+        timeout_seconds: 10
+
       - name: python_version
         run: python --version
+        timeout_seconds: 10

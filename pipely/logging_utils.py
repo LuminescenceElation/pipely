@@ -12,7 +12,7 @@ def new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
-def setup_logging(
+def init_logging(
     run_id: str,
     *,
     log_level: str = "INFO",
