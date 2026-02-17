@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import shlex
 import subprocess
-import time
 from pathlib import Path
 
 import typer
 import yaml
 from rich.console import Console
 
-from pipely.logging_utils import init_logging
+from pipely.logging_utils import init_logging, new_run_id
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -23,10 +22,7 @@ def pipeline(
     pipeline_file: Path = typer.Argument(..., exists=True),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
-    # Generate a readable run id like 20260216-180903
-    run_id = time.strftime("%Y%m%d-%H%M%S")
-
-    # Set up file logging and get a logger for this run
+    run_id = new_run_id()
     logger, log_path = init_logging(run_id)
 
     logger.info("Starting pipeline run")
@@ -45,7 +41,6 @@ def pipeline(
     pipeline_name = data.get("name", "pipeline")
     logger.info("Pipeline name: %s", pipeline_name)
 
-    # Print a short human-friendly header (logging has the full detail)
     console.print(f"[bold]Running[/bold] {pipeline_name} (run_id={run_id})")
 
     jobs: dict = data.get("jobs", {})
@@ -54,7 +49,6 @@ def pipeline(
         logger.error("No jobs found in pipeline YAML")
         raise typer.Exit(code=2)
 
-    # MVP runner: run jobs in YAML order; steps in order
     for job_name, job in jobs.items():
         console.print(f"\n[bold blue]Job:[/bold blue] {job_name}")
         logger.info("=== Job start: %s ===", job_name)
@@ -86,7 +80,7 @@ def pipeline(
                 logger.info("Step %s DRY RUN: %s", idx, step_name)
                 continue
 
-            # Safer than shell=True: parse into args and run directly
+            # Parse command (safer than shell=True)
             try:
                 args = shlex.split(command)
             except ValueError as e:
@@ -94,22 +88,73 @@ def pipeline(
                 logger.error("Failed to parse command: %s", e)
                 raise typer.Exit(code=2)
 
-            result = subprocess.run(args, text=True, capture_output=True)
-
-            # Log stdout/stderr to file AND show in terminal
-            if result.stdout:
-                logger.info("stdout:\n%s", result.stdout.rstrip())
-                console.print(result.stdout.rstrip())
-
-            if result.stderr:
-                logger.warning("stderr:\n%s", result.stderr.rstrip())
-                console.print(f"[red]{result.stderr.rstrip()}[/red]")
-
-
-            # --- Failure strategy: continue_on_error ---
+            retries = int(step.get("retries", 0))
+            timeout_seconds = step.get("timeout_seconds")
             continue_on_error = step.get("continue_on_error", False)
 
-            if result.returncode != 0:
+            result: subprocess.CompletedProcess[str] | None = None
+
+            # Attempt loop: 1 + retries
+            for attempt in range(1, retries + 2):
+                if attempt > 1:
+                    console.print(
+                        f"[yellow]Retrying {step_name} (attempt {attempt}/{retries + 1})[/yellow]"
+                    )
+                    logger.warning(
+                        "Retrying step %s (attempt %s/%s)",
+                        step_name,
+                        attempt,
+                        retries + 1,
+                    )
+
+                try:
+                    result = subprocess.run(
+                        args,
+                        text=True,
+                        capture_output=True,
+                        timeout=timeout_seconds,
+                    )
+                except subprocess.TimeoutExpired:
+                    console.print(f"[red]    ⏰ Step timed out after {timeout_seconds}s[/red]")
+                    logger.error(
+                        "Step %s TIMEOUT after %ss: %s",
+                        idx,
+                        timeout_seconds,
+                        step_name,
+                    )
+
+                    # If there are attempts left, retry
+                    if attempt <= retries:
+                        continue
+
+                    # No attempts left: decide whether to continue pipeline
+                    if continue_on_error:
+                        console.print("[yellow]    ⚠ Continuing despite timeout[/yellow]")
+                        logger.warning("Continuing despite timeout (continue_on_error=true)")
+                        result = None
+                        break
+
+                    raise typer.Exit(code=124)
+
+                # Got a result (no timeout)
+                if result.stdout:
+                    logger.info("stdout:\n%s", result.stdout.rstrip())
+                    console.print(result.stdout.rstrip())
+
+                if result.stderr:
+                    logger.warning("stderr:\n%s", result.stderr.rstrip())
+                    console.print(f"[red]{result.stderr.rstrip()}[/red]")
+
+                if result.returncode == 0:
+                    console.print("[green]    ✓ OK[/green]")
+                    logger.info("Step %s OK: %s", idx, step_name)
+                    break
+
+                # Non-zero exit: if attempts left, retry
+                if attempt <= retries:
+                    continue
+
+                # No attempts left: handle failure strategy
                 console.print(f"[red]    ✖ Step failed (exit code {result.returncode})[/red]")
                 logger.error(
                     "Step %s FAILED: %s (exit code %s)",
@@ -121,13 +166,9 @@ def pipeline(
                 if continue_on_error:
                     console.print("[yellow]    ⚠ Continuing despite failure[/yellow]")
                     logger.warning("Continuing despite failure (continue_on_error=true)")
-                    continue
+                    break
 
                 raise typer.Exit(code=result.returncode)
-
-            # Only log OK if we did NOT fail
-            console.print("[green]    ✓ OK[/green]")
-            logger.info("Step %s OK: %s", idx, step_name)
 
         logger.info("=== Job end: %s ===", job_name)
 
