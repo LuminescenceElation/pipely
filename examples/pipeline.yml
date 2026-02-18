@@ -6,10 +6,11 @@ jobs:
       - name: greet
         run: echo "Hello from Pipely!"
 
-      # This step is designed to fail once, then succeed on retry.
-      - name: flaky_step_demo
-        run: bash -lc 'test -f /tmp/pipely_retry_demo || (echo "first run fails"; touch /tmp/pipely_retry_demo; exit 1); echo "second run ok"'
-        retries: 1
-
       - name: python_version
         run: python --version
+
+  parallel_demo:
+    steps:
+      - name: wait_a_bit
+        run: bash -lc 'echo "parallel job starting"; sleep 3; echo "parallel job done"'
+        timeout_seconds: 10

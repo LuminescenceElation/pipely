@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 import typer
 import yaml
@@ -21,7 +24,19 @@ app.add_typer(run_app, name="run")
 def pipeline(
     pipeline_file: Path = typer.Argument(..., exists=True),
     dry_run: bool = typer.Option(False, "--dry-run"),
+    max_workers: int = typer.Option(4, "--max-workers", min=1, help="Max parallel jobs."),
+    fail_fast: bool = typer.Option(
+        False,
+        "--fail-fast",
+        help="Stop scheduling new jobs after the first failure (still waits for running jobs).",
+    ),
 ) -> None:
+    """
+    Run a pipeline YAML.
+
+    Jobs run in parallel (up to --max-workers).
+    Steps within a job run sequentially.
+    """
     run_id = new_run_id()
     logger, log_path = init_logging(run_id)
 
@@ -30,6 +45,8 @@ def pipeline(
     logger.info("Log file: %s", log_path)
     logger.info("Pipeline file: %s", pipeline_file)
     logger.info("Dry run: %s", dry_run)
+    logger.info("Max workers: %s", max_workers)
+    logger.info("Fail fast: %s", fail_fast)
 
     # Load YAML
     try:
@@ -40,140 +57,205 @@ def pipeline(
 
     pipeline_name = data.get("name", "pipeline")
     logger.info("Pipeline name: %s", pipeline_name)
-
     console.print(f"[bold]Running[/bold] {pipeline_name} (run_id={run_id})")
 
-    jobs: dict = data.get("jobs", {})
+    jobs: dict[str, Any] = data.get("jobs", {}) or {}
     if not jobs:
         console.print("[red]No jobs found in pipeline YAML.[/red]")
         logger.error("No jobs found in pipeline YAML")
         raise typer.Exit(code=2)
 
-    for job_name, job in jobs.items():
-        console.print(f"\n[bold blue]Job:[/bold blue] {job_name}")
-        logger.info("=== Job start: %s ===", job_name)
+    # Prevent messy interleaving in terminal output when jobs run in parallel.
+    console_lock = threading.Lock()
 
-        steps = job.get("steps", [])
+    def safe_print(msg: str) -> None:
+        with console_lock:
+            console.print(msg)
+
+    def run_job(job_name: str, job: dict[str, Any]) -> int:
+        """
+        Run a single job. Return 0 if success else non-zero.
+        """
+        logger.info("=== Job start: %s ===", job_name)
+        safe_print(f"\n[bold blue]Job:[/bold blue] {job_name}")
+
+        steps = job.get("steps", []) or []
         if not steps:
-            console.print("[yellow]  (no steps)[/yellow]")
+            safe_print("[yellow]  (no steps)[/yellow]")
             logger.warning("Job %s has no steps", job_name)
             logger.info("=== Job end: %s ===", job_name)
-            continue
+            return 0
 
         for idx, step in enumerate(steps, start=1):
             step_name = step.get("name", f"step-{idx}")
             command = step.get("run")
 
             if not command:
-                console.print(f"[yellow]  Skipping {step_name}: no 'run' command[/yellow]")
-                logger.warning("Step %s skipped: no 'run' command", step_name)
+                safe_print(f"[yellow]  Skipping {job_name}.{step_name}: no 'run' command[/yellow]")
+                logger.warning("[%s] Step %s skipped: no 'run' command", job_name, step_name)
                 continue
 
-            logger.info("Step %s start: %s", idx, step_name)
-            logger.info("$ %s", command)
+            logger.info("[%s] Step %s start: %s", job_name, idx, step_name)
+            logger.info("[%s] $ %s", job_name, command)
 
-            console.print(f"[cyan]  → Step {idx}: {step_name}[/cyan]")
-            console.print(f"[dim]    $ {command}[/dim]")
+            safe_print(f"[cyan]  → ({job_name}) Step {idx}: {step_name}[/cyan]")
+            safe_print(f"[dim]    $ {command}[/dim]")
 
             if dry_run:
-                console.print("[yellow]    DRY RUN[/yellow]")
-                logger.info("Step %s DRY RUN: %s", idx, step_name)
+                safe_print("[yellow]    DRY RUN[/yellow]")
+                logger.info("[%s] Step %s DRY RUN: %s", job_name, idx, step_name)
                 continue
 
-            # Parse command (safer than shell=True)
+            # Safer than shell=True: parse into args and run directly
             try:
                 args = shlex.split(command)
             except ValueError as e:
-                console.print(f"[red]    Failed to parse command: {e}[/red]")
-                logger.error("Failed to parse command: %s", e)
-                raise typer.Exit(code=2)
+                safe_print(f"[red]    Failed to parse command: {e}[/red]")
+                logger.error("[%s] Failed to parse command: %s", job_name, e)
+                return 2
 
-            retries = int(step.get("retries", 0))
+            retries = int(step.get("retries", 0) or 0)
+            retry_delay_seconds = float(step.get("retry_delay_seconds", 0) or 0)
             timeout_seconds = step.get("timeout_seconds")
-            continue_on_error = step.get("continue_on_error", False)
 
-            result: subprocess.CompletedProcess[str] | None = None
+            attempt = 0
+            last_result: subprocess.CompletedProcess[str] | None = None
 
-            # Attempt loop: 1 + retries
-            for attempt in range(1, retries + 2):
-                if attempt > 1:
-                    console.print(
-                        f"[yellow]Retrying {step_name} (attempt {attempt}/{retries + 1})[/yellow]"
-                    )
-                    logger.warning(
-                        "Retrying step %s (attempt %s/%s)",
-                        step_name,
-                        attempt,
-                        retries + 1,
-                    )
+            while True:
+                attempt += 1
 
                 try:
-                    result = subprocess.run(
+                    last_result = subprocess.run(
                         args,
                         text=True,
                         capture_output=True,
                         timeout=timeout_seconds,
                     )
                 except subprocess.TimeoutExpired:
-                    console.print(f"[red]    ⏰ Step timed out after {timeout_seconds}s[/red]")
-                    logger.error(
-                        "Step %s TIMEOUT after %ss: %s",
-                        idx,
-                        timeout_seconds,
-                        step_name,
-                    )
+                    safe_print(f"[red]    ⏰ Step timed out after {timeout_seconds}s[/red]")
+                    logger.error("[%s] Step %s TIMEOUT after %ss: %s", job_name, idx, timeout_seconds, step_name)
 
-                    # If there are attempts left, retry
-                    if attempt <= retries:
-                        continue
-
-                    # No attempts left: decide whether to continue pipeline
+                    continue_on_error = bool(step.get("continue_on_error", False))
                     if continue_on_error:
-                        console.print("[yellow]    ⚠ Continuing despite timeout[/yellow]")
-                        logger.warning("Continuing despite timeout (continue_on_error=true)")
-                        result = None
+                        safe_print("[yellow]    ⚠ Continuing despite timeout[/yellow]")
+                        logger.warning("[%s] Continuing despite timeout (continue_on_error=true)", job_name)
                         break
 
-                    raise typer.Exit(code=124)
+                    return 124  # common "timeout" style code
 
-                # Got a result (no timeout)
-                if result.stdout:
-                    logger.info("stdout:\n%s", result.stdout.rstrip())
-                    console.print(result.stdout.rstrip())
-
-                if result.stderr:
-                    logger.warning("stderr:\n%s", result.stderr.rstrip())
-                    console.print(f"[red]{result.stderr.rstrip()}[/red]")
-
-                if result.returncode == 0:
-                    console.print("[green]    ✓ OK[/green]")
-                    logger.info("Step %s OK: %s", idx, step_name)
+                # Success
+                if last_result.returncode == 0:
                     break
 
-                # Non-zero exit: if attempts left, retry
-                if attempt <= retries:
-                    continue
+                # Failure, no retries left
+                if attempt > (retries + 1):
+                    break
 
-                # No attempts left: handle failure strategy
-                console.print(f"[red]    ✖ Step failed (exit code {result.returncode})[/red]")
+                # Retry
+                if attempt <= (retries + 1):
+                    next_attempt = attempt + 1
+                    if attempt <= retries:
+                        safe_print(
+                            f"[yellow]Retrying {job_name}.{step_name} "
+                            f"(attempt {attempt + 1}/{retries + 1})[/yellow]"
+                        )
+                        logger.warning(
+                            "[%s] Retrying step %s (attempt %s/%s)",
+                            job_name,
+                            step_name,
+                            attempt + 1,
+                            retries + 1,
+                        )
+                        if retry_delay_seconds > 0:
+                            # small sleep without importing time globally
+                            import time as _time
+
+                            _time.sleep(retry_delay_seconds)
+                        continue
+                    break
+
+            # If we never got a result (shouldn't happen), treat as failure
+            if last_result is None:
+                logger.error("[%s] Step produced no result: %s", job_name, step_name)
+                return 2
+
+            # Log stdout/stderr to file AND show in terminal
+            if last_result.stdout:
+                logger.info("[%s] stdout:\n%s", job_name, last_result.stdout.rstrip())
+                safe_print(last_result.stdout.rstrip())
+
+            if last_result.stderr:
+                logger.warning("[%s] stderr:\n%s", job_name, last_result.stderr.rstrip())
+                safe_print(f"[red]{last_result.stderr.rstrip()}[/red]")
+
+            continue_on_error = bool(step.get("continue_on_error", False))
+
+            if last_result.returncode != 0:
+                safe_print(f"[red]    ✖ Step failed (exit code {last_result.returncode})[/red]")
                 logger.error(
-                    "Step %s FAILED: %s (exit code %s)",
+                    "[%s] Step %s FAILED: %s (exit code %s)",
+                    job_name,
                     idx,
                     step_name,
-                    result.returncode,
+                    last_result.returncode,
                 )
 
                 if continue_on_error:
-                    console.print("[yellow]    ⚠ Continuing despite failure[/yellow]")
-                    logger.warning("Continuing despite failure (continue_on_error=true)")
-                    break
+                    safe_print("[yellow]    ⚠ Continuing despite failure[/yellow]")
+                    logger.warning("[%s] Continuing despite failure (continue_on_error=true)", job_name)
+                    continue
 
-                raise typer.Exit(code=result.returncode)
+                return int(last_result.returncode)
+
+            safe_print("[green]    ✓ OK[/green]")
+            logger.info("[%s] Step %s OK: %s", job_name, idx, step_name)
 
         logger.info("=== Job end: %s ===", job_name)
+        return 0
 
-    console.print("\n[bold green]Pipeline completed successfully.[/bold green]")
+    # Run jobs in parallel
+    job_results: dict[str, int] = {}
+    any_failed = False
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for job_name, job in jobs.items():
+            if fail_fast and any_failed:
+                logger.warning("Fail-fast enabled: skipping job %s (not scheduled)", job_name)
+                safe_print(f"[yellow]Skipping job {job_name} due to fail-fast[/yellow]")
+                job_results[job_name] = 1
+                continue
+
+            futures[pool.submit(run_job, job_name, job)] = job_name
+
+        for future in as_completed(futures):
+            job_name = futures[future]
+            try:
+                code = int(future.result())
+            except Exception as e:
+                # Hard crash in worker
+                logger.exception("Job %s crashed: %s", job_name, e)
+                code = 2
+
+            job_results[job_name] = code
+            if code != 0:
+                any_failed = True
+
+    # Summary
+    safe_print("\n[bold]Job summary:[/bold]")
+    for name, code in job_results.items():
+        if code == 0:
+            safe_print(f"[green]  ✓ {name}[/green]")
+        else:
+            safe_print(f"[red]  ✖ {name} (exit {code})[/red]")
+
+    if any_failed:
+        logger.error("Pipeline completed with failures: %s", job_results)
+        safe_print("\n[bold red]Pipeline completed with failures.[/bold red]")
+        raise typer.Exit(code=1)
+
     logger.info("Pipeline completed successfully")
+    safe_print("\n[bold green]Pipeline completed successfully.[/bold green]")
 
 
 if __name__ == "__main__":
