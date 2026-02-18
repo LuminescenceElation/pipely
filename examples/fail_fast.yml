@@ -1,0 +1,16 @@
+name: fail_fast_demo
+
+jobs:
+  build:
+    steps:
+      - run: echo "building..."
+
+  fail_job:
+    needs: [build]
+    steps:
+      - run: bash -c "exit 1"
+
+  deploy:
+    needs: [fail_job]
+    steps:
+      - run: echo "deploying..."
