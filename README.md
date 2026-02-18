@@ -2,26 +2,26 @@
 
 Pipely is a lightweight CLI tool that runs CI/CD pipelines locally from a YAML definition.
 
-It’s designed as a learning project to explore DevOps concepts including pipeline orchestration, safe command execution, and reproducible automation.
+It’s designed as a learning project to explore DevOps concepts including pipeline orchestration, safe command execution, parallelism, and failure handling.
 
 ---
 
-## ✨ Features
+## Features
 
-- Run pipelines defined in YAML  
-- Step-by-step execution with clear output  
-- Dry-run mode for safe testing  
-- Structured CLI using Typer  
-- Safe subprocess execution (no `shell=True`)  
-- Parallel job execution with worker limits  
-- Dependency-aware scheduling (`needs`)  
-- Retries, timeouts, and failure strategies  
-- Fail-fast pipeline cancellation  
-- Job timing and summary output  
+- Run pipelines defined in YAML
+- Step-by-step execution with clear output
+- Dry-run mode for safe testing
+- Structured CLI using Typer
+- Safe subprocess execution (no `shell=True`)
+- Parallel job execution with worker limits
+- Dependency-aware scheduling (`needs`)
+- Retries, timeouts, and failure strategies
+- Fail-fast pipeline cancellation
+- Job timing and summary output
 
 ---
 
-## 🚀 Example
+## Example
 
 ### Run a pipeline
 
@@ -29,7 +29,21 @@ It’s designed as a learning project to explore DevOps concepts including pipel
 pipely run pipeline examples/pipeline.yml
 ```
 
-### Example pipeline YAML
+### Run with parallel workers
+
+```bash
+pipely run pipeline examples/pipeline.yml --max-workers 2
+```
+
+### Run with fail-fast enabled
+
+```bash
+pipely run pipeline examples/fail_fast.yml --fail-fast
+```
+
+---
+
+## Example pipeline YAML
 
 ```yaml
 name: demo
@@ -43,33 +57,33 @@ jobs:
 
 ---
 
-## 🎯 Why this project exists
+## Why this project exists
 
 This project is part of my transition into DevOps and Cloud Engineering.
 
 It demonstrates:
 
-- Automation thinking  
-- Safe execution practices  
-- CLI tooling design  
-- Real-world tradeoffs in pipeline systems  
-- Parallel orchestration & dependency management  
+- Automation thinking
+- Safe execution practices
+- CLI tooling design
+- Real-world tradeoffs in pipeline systems
+- Parallel orchestration & dependency management
 
 This portfolio is intentionally a work in progress. Each feature is added incrementally to reflect deliberate learning and production-minded design.
 
 ---
 
-## 🗺 Roadmap
+## Roadmap
 
 Planned improvements:
 
-- Docker-based step execution  
-- GitHub Actions workflow exporter  
-- Remote runners  
-- Plugin system for custom executors  
+- Docker-based step execution
+- GitHub Actions workflow exporter
+- Remote runners
+- Plugin system for custom executors
 
 ---
 
-## 👤 Author
+## Author
 
 Built by **Luminescence Elation** as part of a DevOps learning portfolio.
