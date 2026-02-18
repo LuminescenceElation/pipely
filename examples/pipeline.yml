@@ -1,16 +1,16 @@
-name: demo
+name: dependency_demo
 
 jobs:
-  hello:
+  build:
     steps:
-      - name: greet
-        run: echo "Hello from Pipely!"
+      - run: echo "building..."
 
-      - name: python_version
-        run: python --version
-
-  parallel_demo:
+  test:
+    needs: build
     steps:
-      - name: wait_a_bit
-        run: bash -lc 'echo "parallel job starting"; sleep 3; echo "parallel job done"'
-        timeout_seconds: 10
+      - run: echo "running tests..."
+
+  deploy:
+    needs: [build, test]
+    steps:
+      - run: echo "deploying..."
