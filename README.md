@@ -8,11 +8,16 @@ It’s designed as a learning project to explore DevOps concepts including pipel
 
 ## ✨ Features
 
-- Run pipelines defined in YAML
-- Step-by-step execution with clear output
-- Dry-run mode for safe testing
-- Structured CLI using Typer
-- Safe subprocess execution (no `shell=True`)
+- Run pipelines defined in YAML  
+- Step-by-step execution with clear output  
+- Dry-run mode for safe testing  
+- Structured CLI using Typer  
+- Safe subprocess execution (no `shell=True`)  
+- Parallel job execution with worker limits  
+- Dependency-aware scheduling (`needs`)  
+- Retries, timeouts, and failure strategies  
+- Fail-fast pipeline cancellation  
+- Job timing and summary output  
 
 ---
 
@@ -44,27 +49,27 @@ This project is part of my transition into DevOps and Cloud Engineering.
 
 It demonstrates:
 
-- Automation thinking
-- Safe execution practices
-- CLI tooling design
-- Real-world tradeoffs in pipeline systems
+- Automation thinking  
+- Safe execution practices  
+- CLI tooling design  
+- Real-world tradeoffs in pipeline systems  
+- Parallel orchestration & dependency management  
 
 This portfolio is intentionally a work in progress. Each feature is added incrementally to reflect deliberate learning and production-minded design.
 
 ---
 
-## 🔧 Roadmap
+## 🗺 Roadmap
 
 Planned improvements:
 
-- Parallel job execution
-- Logging & timestamps
-- Failure strategies (continue-on-error, retries)
-- Docker-based step execution
-- GitHub Actions workflow exporter
+- Docker-based step execution  
+- GitHub Actions workflow exporter  
+- Remote runners  
+- Plugin system for custom executors  
 
 ---
 
-## 🧑‍💻 Author
+## 👤 Author
 
-Built by Luminescence Elation as part of a DevOps learning portfolio.
+Built by **Luminescence Elation** as part of a DevOps learning portfolio.
